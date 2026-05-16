@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>STATE.md Viewer (fallback)</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a;
+        --muted: #6b7280;
+        --border: #e5e7eb;
+        --bg: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #f4f4f5;
+          --muted: #9ca3af;
+          --border: #2a2a2a;
+          --bg: #161616;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      .wrap { max-width: 760px; margin: 0 auto; padding: 32px 24px; }
+      h1 { font-size: 1.6rem; margin: 0 0 4px; }
+      h2 {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin: 28px 0 6px;
+      }
+      .meta-top { color: var(--muted); font-size: 0.85rem; margin-bottom: 4px; }
+      .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 20px; }
+      .item { display: flex; gap: 8px; margin-top: 10px; }
+      .item.sub { margin-left: 26px; }
+      .icon { width: 16px; text-align: center; flex: none; line-height: 1.4; }
+      .title { font-weight: 600; }
+      .badge {
+        display: inline-block;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 1px 8px;
+        font-size: 0.72rem;
+        margin-left: 8px;
+        vertical-align: middle;
+      }
+      .body { font-size: 0.9rem; color: var(--muted); margin: 2px 0 0; }
+      .itemmeta { font-size: 0.78rem; font-style: italic; color: var(--muted); margin: 2px 0 0; }
+      .where { white-space: pre-line; color: var(--muted); font-size: 0.9rem; }
+      ul.plain { margin: 6px 0 0; padding-left: 20px; color: var(--muted); font-size: 0.9rem; }
+      .done { color: #059669; }
+      .active { color: #2563eb; }
+      .blocked { color: #dc2626; }
+      .pending, .skipped, .unknown { color: var(--muted); }
+      .skipped .title { text-decoration: line-through; }
+      button, label.file {
+        font: inherit;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        padding: 6px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      textarea {
+        width: 100%;
+        min-height: 180px;
+        font: 13px/1.5 ui-monospace, monospace;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: transparent;
+        color: var(--fg);
+        padding: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="toolbar">
+        <strong>STATE.md Viewer</strong>
+        <span class="meta-top">— standalone fallback, same parser rules as the app</span>
+        <label class="file" style="margin-left:auto">
+          Open STATE.md
+          <input id="file" type="file" accept=".md,text/markdown" hidden />
+        </label>
+      </div>
+      <details>
+        <summary class="meta-top">Or paste markdown</summary>
+        <textarea id="paste" placeholder="Paste STATE.md content, then click Render"></textarea>
+        <button id="render" style="margin-top:8px">Render</button>
+      </details>
+      <div id="out"></div>
+    </div>
+
+    <script>
+      // Strict STATE.md parser — mirrors src/lib/parse-state.ts.
+      const STATUS = new Set(["done", "active", "pending", "blocked", "skipped"]);
+      function normStatus(s) {
+        s = s.trim().toLowerCase();
+        return STATUS.has(s) ? s : "unknown";
+      }
+      function splitTrailer(text) {
+        const idx = text.lastIndexOf(" · ");
+        if (idx === -1) return null;
+        const title = text.slice(0, idx).trim();
+        const status = text.slice(idx + 3).trim();
+        if (!title || !status) return null;
+        return { title, status: normStatus(status) };
+      }
+      function parseState(md) {
+        const lines = md.split(/\r?\n/);
+        const r = {
+          title: "",
+          lastUpdated: "",
+          currentFocus: "",
+          where: "",
+          path: [],
+          parked: [],
+          questions: [],
+        };
+        let section = "none";
+        const whereLines = [];
+        let main = null,
+          sub = null;
+        const pend = (it, line) => {
+          const t = line.trim();
+          if (!t) return;
+          if (t.startsWith("_") && t.endsWith("_") && t.length > 1) {
+            if (!it.meta) it.meta = t.slice(1, -1).trim();
+            return;
+          }
+          if (!it.body) it.body = t;
+        };
+        for (const raw of lines) {
+          const t = raw.trim();
+          if (t.startsWith("# ") && !r.title) {
+            r.title = t.slice(2).trim();
+            continue;
+          }
+          const lu = /^_Last updated:\s*(.+?)_$/.exec(t);
+          if (lu && !r.lastUpdated) {
+            r.lastUpdated = lu[1].trim();
+            continue;
+          }
+          if (t.startsWith("## ")) {
+            const h = t.slice(3).trim().toLowerCase();
+            main = null;
+            sub = null;
+            section = h.includes("where we are")
+              ? "where"
+              : h.includes("path")
+                ? "path"
+                : h.includes("parked")
+                  ? "parked"
+                  : h.includes("open questions")
+                    ? "questions"
+                    : "none";
+            continue;
+          }
+          if (section === "where") {
+            const f = /^\*\*Current focus:\*\*\s*(.+)$/.exec(t);
+            if (f) {
+              r.currentFocus = f[1].trim();
+              continue;
+            }
+            if (t) whereLines.push(t);
+            continue;
+          }
+          if (section === "path") {
+            if (t.startsWith("#### ")) {
+              const sp = splitTrailer(t.slice(5).trim());
+              if (sp && main) {
+                sub = { ...sp, body: "", meta: "", subItems: [] };
+                main.subItems.push(sub);
+              } else sub = null;
+              continue;
+            }
+            if (t.startsWith("### ")) {
+              const sp = splitTrailer(t.slice(4).trim());
+              if (sp) {
+                main = { ...sp, body: "", meta: "", subItems: [] };
+                r.path.push(main);
+              } else main = null;
+              sub = null;
+              continue;
+            }
+            const target = sub || main;
+            if (target) pend(target, raw);
+            continue;
+          }
+          if (section === "parked" && t.startsWith("- "))
+            r.parked.push(t.slice(2).trim());
+          if (section === "questions" && t.startsWith("- "))
+            r.questions.push(t.slice(2).trim());
+        }
+        r.where = whereLines.join("\n").trim();
+        return r;
+      }
+
+      const ICON = {
+        done: "✔",
+        active: "◉",
+        pending: "○",
+        blocked: "⚠",
+        skipped: "⊖",
+        unknown: "?",
+      };
+      const esc = (s) =>
+        s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+
+      function renderItem(it, sub) {
+        let h = `<div class="item ${sub ? "sub " : ""}${it.status}">`;
+        h += `<div class="icon">${ICON[it.status]}</div><div>`;
+        h += `<span class="title">${esc(it.title)}</span><span class="badge">${it.status}</span>`;
+        if (it.body) h += `<p class="body">${esc(it.body)}</p>`;
+        if (it.meta) h += `<p class="itemmeta">${esc(it.meta)}</p>`;
+        h += `</div></div>`;
+        for (const s of it.subItems) h += renderItem(s, true);
+        return h;
+      }
+
+      function render(md) {
+        const s = parseState(md);
+        let h = `<h1>${esc(s.title || "Untitled project")}</h1>`;
+        if (s.lastUpdated)
+          h += `<div class="meta-top">Last updated: ${esc(s.lastUpdated)}</div>`;
+        h += `<h2>Where we are</h2>`;
+        if (s.currentFocus)
+          h += `<p><strong>Current focus:</strong> ${esc(s.currentFocus)}</p>`;
+        if (s.where) h += `<p class="where">${esc(s.where)}</p>`;
+        h += `<h2>Path</h2>`;
+        if (!s.path.length) h += `<p class="body">No path items.</p>`;
+        for (const it of s.path) h += renderItem(it, false);
+        if (s.parked.length) {
+          h += `<h2>Parked</h2><ul class="plain">`;
+          for (const p of s.parked) h += `<li>${esc(p)}</li>`;
+          h += `</ul>`;
+        }
+        if (s.questions.length) {
+          h += `<h2>Open questions</h2><ul class="plain">`;
+          for (const q of s.questions) h += `<li>${esc(q)}</li>`;
+          h += `</ul>`;
+        }
+        document.getElementById("out").innerHTML = h;
+      }
+
+      document.getElementById("file").addEventListener("change", (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        const rd = new FileReader();
+        rd.onload = () => render(String(rd.result));
+        rd.readAsText(f);
+      });
+      document.getElementById("render").addEventListener("click", () => {
+        render(document.getElementById("paste").value);
+      });
+    </script>
+  </body>
+</html>
