@@ -4,15 +4,15 @@ _Last updated: 2026-05-16_
 
 ## Where we are
 
-**Current focus:** Step 4 — first daily-use feedback (Session 2 complete)
+**Current focus:** Step 5 — awaiting first real daily-use feedback
 
-Session 2 shipped: parser rewritten to implement STATE-FORMAT.md exactly
-(hierarchical ordinals, five bare statuses, PR trailers, malformed lines
-skipped), Home view as the default screen with per-project current-step and
-main-path-vs-subtask indicator, manual refresh + last-read in the project
-view, and a Manage screen (rename, color, repo URL, remove). Headless launch
-and parser tests pass; the click-through smoke test still needs a human on a
-machine with a display.
+Session 3 was a hardening pass, no new features. The strict parser's silence
+is now visible: Home and the project view distinguish "STATE.md missing" from
+"read OK but zero valid steps" (pointing at STATE-FORMAT.md). Added a loading
+state (no empty-state flash), Esc-to-back, refresh-in-flight disabling, and
+add-form guards (Enter/Escape, disabled Add when name empty). Builds, parser
+tests, and headless launch all pass. The interactive click-through and actual
+daily-use feedback still require a human on a machine with a display.
 
 ## Path
 
@@ -20,13 +20,14 @@ machine with a display.
 2. Format contract — CLAUDE.md + STATE-FORMAT.md + conform this file · done
 3. Session 2 — Home view, manual refresh, Manage screen, routing · done
 3.1 Replace parser to implement STATE-FORMAT.md (ordinal tree, PR trailer) · done
-   Discovered during 2 — the session-1 parser silently broke on the
-   contract format. Now spec-bound with a parser test (npm test).
-4. Session 3 — polish + first daily-use feedback · pending
+   Discovered during 2 — spec-bound now with a parser test (npm test).
+4. Session 3 — safe hardening pass (error/empty states, a11y, guards) · done
+5. Collect first daily-use feedback, then polish from real signal · pending
+   Needs a human running `npm run tauri dev`; cannot be done headless.
 
 ## Open questions
 
-- PR trailers omitted on done steps: work ships via branch pushes, not PRs,
-  so no PR numbers yet. Backfill if/when PRs are opened.
-- notes-sync stays parked (private, machine-local, never synced).
-- Real-time STATE.md watching stays parked (manual Refresh for now).
+- Deferred pool untouched (file-watching, search, tray, notifications,
+  notes markdown-preview toggle) — pick from real usage friction.
+- PR trailers omitted on done steps: work ships via branch pushes, not PRs.
+- notes-sync and real-time STATE.md watching stay parked.

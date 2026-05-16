@@ -122,6 +122,14 @@ export function Manage({ onBack }: { onBack: () => void }) {
 
   useEffect(refresh, []);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && pendingPath === null) onBack();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onBack, pendingPath]);
+
   async function pickFile() {
     const selected = await open({
       multiple: false,

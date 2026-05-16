@@ -10,6 +10,7 @@ interface CardState {
   current: Step | null;
   lastUpdated: string;
   error: boolean;
+  noSteps: boolean;
 }
 
 function ProjectCard({
@@ -46,7 +47,17 @@ function ProjectCard({
                 : ""}
         </span>
       </div>
-      {data !== undefined && !data.error && (
+      {data !== undefined && data.error && (
+        <p className="break-all text-sm text-red-600 dark:text-red-400">
+          Could not read {project.statePath}
+        </p>
+      )}
+      {data !== undefined && !data.error && data.noSteps && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          No valid steps parsed — check the file against STATE-FORMAT.md
+        </p>
+      )}
+      {data !== undefined && !data.error && !data.noSteps && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           {cur === null ? (
             <span className="text-muted-foreground">No active step</span>
@@ -80,6 +91,8 @@ export function Home({
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState("");
   const [repoInput, setRepoInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const readCard = useCallback(async (p: Project): Promise<CardState> => {
     try {
@@ -88,19 +101,26 @@ export function Home({
         current: currentStep(parsed),
         lastUpdated: parsed.lastUpdated,
         error: false,
+        noSteps: parsed.flat.length === 0,
       };
     } catch {
-      return { current: null, lastUpdated: "", error: true };
+      return { current: null, lastUpdated: "", error: true, noSteps: false };
     }
   }, []);
 
   const refreshAll = useCallback(async () => {
-    const list = await getProjects();
-    setProjects(list);
-    const entries = await Promise.all(
-      list.map(async (p) => [p.id, await readCard(p)] as const),
-    );
-    setCards(Object.fromEntries(entries));
+    setRefreshing(true);
+    try {
+      const list = await getProjects();
+      setProjects(list);
+      const entries = await Promise.all(
+        list.map(async (p) => [p.id, await readCard(p)] as const),
+      );
+      setCards(Object.fromEntries(entries));
+    } finally {
+      setRefreshing(false);
+      setLoading(false);
+    }
   }, [readCard]);
 
   useEffect(() => {
@@ -144,9 +164,12 @@ export function Home({
         <div className="flex gap-2">
           <button
             onClick={() => void refreshAll()}
-            className="inline-flex items-center gap-1 rounded-md border px-3 py-2 text-sm hover:bg-accent"
+            disabled={refreshing}
+            className="inline-flex items-center gap-1 rounded-md border px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
           >
-            <RefreshCw className="size-4" />
+            <RefreshCw
+              className={`size-4 ${refreshing ? "animate-spin" : ""}`}
+            />
             Refresh all
           </button>
           <button
@@ -176,19 +199,28 @@ export function Home({
             autoFocus
             value={nameInput}
             onChange={(e) => setNameInput(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void confirmAdd();
+              if (e.key === "Escape") setPendingPath(null);
+            }}
             placeholder="Project name"
             className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none"
           />
           <input
             value={repoInput}
             onChange={(e) => setRepoInput(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void confirmAdd();
+              if (e.key === "Escape") setPendingPath(null);
+            }}
             placeholder="Repo URL (optional, e.g. https://github.com/org/repo)"
             className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none"
           />
           <div className="flex gap-2">
             <button
               onClick={() => void confirmAdd()}
-              className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+              disabled={nameInput.trim().length === 0}
+              className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
               Add
             </button>
@@ -203,7 +235,9 @@ export function Home({
       )}
 
       <div className="mt-6 space-y-3">
-        {projects.length === 0 ? (
+        {loading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : projects.length === 0 ? (
           <div className="rounded-lg border p-6 text-center">
             <p className="text-sm text-muted-foreground">
               No projects yet.

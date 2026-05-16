@@ -37,6 +37,14 @@ export function ProjectView({
   }, [loadState]);
 
   useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onBack();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onBack]);
+
+  useEffect(() => {
     let cancelled = false;
     void readNotes(project.id).then((content) => {
       if (cancelled) return;
@@ -96,12 +104,21 @@ export function ProjectView({
           ) : state === null ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : (
-            <StateChecklist
-              state={state}
-              {...(project.repoUrl !== undefined
-                ? { repoUrl: project.repoUrl }
-                : {})}
-            />
+            <>
+              {state.flat.length === 0 && (
+                <p className="mb-4 rounded-md border border-amber-600/40 p-3 text-sm text-amber-600 dark:text-amber-400">
+                  STATE.md was read but no valid steps were parsed. Check it
+                  against STATE-FORMAT.md (status must be one of the five bare
+                  values; separator is “ · ”).
+                </p>
+              )}
+              <StateChecklist
+                state={state}
+                {...(project.repoUrl !== undefined
+                  ? { repoUrl: project.repoUrl }
+                  : {})}
+              />
+            </>
           )}
         </div>
 
