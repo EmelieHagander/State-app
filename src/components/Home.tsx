@@ -1,25 +1,55 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Plus, RefreshCw, Settings } from "lucide-react";
 import { addProject, getProjects, type Project } from "@/lib/registry";
-import { readStateFile } from "@/lib/state-md";
-import { parseState, currentStep, type Step } from "@/lib/parse-state";
+import { readStateFile, statStateFile } from "@/lib/state-md";
+import {
+  parseState,
+  currentStep,
+  summarize,
+  type Step,
+} from "@/lib/parse-state";
 import { StatusBadge } from "@/components/StatusBadge";
 
+const STALE_DAYS = 14;
+
 interface CardState {
-  current: Step | null;
-  lastUpdated: string;
   error: boolean;
   noSteps: boolean;
+  current: Step | null;
+  lastUpdated: string;
+  total: number;
+  done: number;
+  progress: number;
+  blocked: number;
+  skipped: number;
+  staleDays: number | null;
+  dateBad: boolean;
+  updatedAtMs: number;
+  mtime: number | null;
+}
+
+function isAttention(c: CardState, changed: boolean): boolean {
+  return (
+    c.error ||
+    c.noSteps ||
+    c.blocked > 0 ||
+    c.skipped > 0 ||
+    c.dateBad ||
+    (c.staleDays !== null && c.staleDays > STALE_DAYS) ||
+    changed
+  );
 }
 
 function ProjectCard({
   project,
   data,
+  changed,
   onOpen,
 }: {
   project: Project;
   data: CardState | undefined;
+  changed: boolean;
   onOpen: (p: Project) => void;
 }) {
   const cur = data?.current ?? null;
@@ -29,7 +59,7 @@ function ProjectCard({
       onClick={() => onOpen(project)}
       className="flex w-full flex-col gap-2 rounded-lg border p-4 text-left hover:bg-accent"
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span
           className="size-3 shrink-0 rounded-full"
           style={{
@@ -37,6 +67,40 @@ function ProjectCard({
           }}
         />
         <span className="font-medium">{project.name}</span>
+        {data !== undefined && !data.error && (
+          <span className="text-xs text-muted-foreground">
+            {data.done}/{data.total} (
+            {Math.round(data.progress * 100)}%)
+          </span>
+        )}
+        {data !== undefined && data.blocked > 0 && (
+          <span className="rounded-full border border-red-600/40 px-2 py-0.5 text-xs text-red-600 dark:text-red-400">
+            {data.blocked} blocked
+          </span>
+        )}
+        {data !== undefined && data.skipped > 0 && (
+          <span className="rounded-full border border-amber-600/40 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400">
+            {data.skipped} dropped
+          </span>
+        )}
+        {data !== undefined &&
+          !data.dateBad &&
+          data.staleDays !== null &&
+          data.staleDays > STALE_DAYS && (
+            <span className="rounded-full border border-amber-600/40 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400">
+              stale {data.staleDays}d
+            </span>
+          )}
+        {data !== undefined && data.dateBad && (
+          <span className="rounded-full border border-amber-600/40 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400">
+            date?
+          </span>
+        )}
+        {changed && (
+          <span className="rounded-full border border-amber-600/40 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400">
+            updated — refresh
+          </span>
+        )}
         <span className="ml-auto text-xs text-muted-foreground">
           {data === undefined
             ? "…"
@@ -47,6 +111,16 @@ function ProjectCard({
                 : ""}
         </span>
       </div>
+
+      {data !== undefined && !data.error && !data.noSteps && (
+        <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full bg-emerald-600 dark:bg-emerald-400"
+            style={{ width: `${Math.round(data.progress * 100)}%` }}
+          />
+        </div>
+      )}
+
       {data !== undefined && data.error && (
         <p className="break-all text-sm text-red-600 dark:text-red-400">
           Could not read {project.statePath}
@@ -88,23 +162,65 @@ export function Home({
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [cards, setCards] = useState<Record<string, CardState>>({});
+  const [changedIds, setChangedIds] = useState<Record<string, boolean>>({});
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState("");
   const [repoInput, setRepoInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const recordedMtimes = useRef<Record<string, number | null>>({});
 
   const readCard = useCallback(async (p: Project): Promise<CardState> => {
+    const mtime = await statStateFile(p.statePath);
     try {
       const parsed = parseState(await readStateFile(p.statePath));
+      const s = summarize(parsed);
+      let staleDays: number | null = null;
+      let dateBad = false;
+      let updatedAtMs = 0;
+      if (parsed.lastUpdated.length > 0) {
+        const d = new Date(`${parsed.lastUpdated}T00:00:00`);
+        if (Number.isNaN(d.getTime())) {
+          dateBad = true;
+        } else {
+          updatedAtMs = d.getTime();
+          staleDays = Math.floor((Date.now() - d.getTime()) / 86400000);
+        }
+      } else {
+        dateBad = true;
+      }
       return {
-        current: currentStep(parsed),
-        lastUpdated: parsed.lastUpdated,
         error: false,
         noSteps: parsed.flat.length === 0,
+        current: currentStep(parsed),
+        lastUpdated: parsed.lastUpdated,
+        total: s.total,
+        done: s.done,
+        progress: s.progress,
+        blocked: s.blocked,
+        skipped: parsed.skipped.length,
+        staleDays,
+        dateBad,
+        updatedAtMs,
+        mtime,
       };
     } catch {
-      return { current: null, lastUpdated: "", error: true, noSteps: false };
+      return {
+        error: true,
+        noSteps: false,
+        current: null,
+        lastUpdated: "",
+        total: 0,
+        done: 0,
+        progress: 0,
+        blocked: 0,
+        skipped: 0,
+        staleDays: null,
+        dateBad: false,
+        updatedAtMs: 0,
+        mtime,
+      };
     }
   }, []);
 
@@ -116,7 +232,13 @@ export function Home({
       const entries = await Promise.all(
         list.map(async (p) => [p.id, await readCard(p)] as const),
       );
-      setCards(Object.fromEntries(entries));
+      const map = Object.fromEntries(entries);
+      setCards(map);
+      const mt: Record<string, number | null> = {};
+      for (const [id, c] of entries) mt[id] = c.mtime;
+      recordedMtimes.current = mt;
+      setChangedIds({});
+      setLastRefresh(new Date());
     } finally {
       setRefreshing(false);
       setLoading(false);
@@ -126,6 +248,30 @@ export function Home({
   useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
+
+  // Focus-triggered staleness check (no continuous polling): when the user
+  // comes back, re-stat each file and flag any that changed since refresh.
+  useEffect(() => {
+    const onFocus = () => {
+      const current = projects;
+      void Promise.all(
+        current.map(
+          async (p) => [p.id, await statStateFile(p.statePath)] as const,
+        ),
+      ).then((pairs) => {
+        setChangedIds((prev) => {
+          const next = { ...prev };
+          for (const [id, m] of pairs) {
+            const rec = recordedMtimes.current[id] ?? null;
+            if (m !== null && rec !== null && m > rec) next[id] = true;
+          }
+          return next;
+        });
+      });
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [projects]);
 
   async function pickFile() {
     const selected = await open({
@@ -156,6 +302,38 @@ export function Home({
     setRepoInput("");
     void refreshAll();
   }
+
+  const ordered = [...projects].sort((a, b) => {
+    const ca = cards[a.id];
+    const cb = cards[b.id];
+    if (ca === undefined || cb === undefined) return 0;
+    const aa = isAttention(ca, changedIds[a.id] ?? false);
+    const ab = isAttention(cb, changedIds[b.id] ?? false);
+    if (aa !== ab) return aa ? -1 : 1;
+    if (cb.updatedAtMs !== ca.updatedAtMs) return cb.updatedAtMs - ca.updatedAtMs;
+    return a.name.localeCompare(b.name);
+  });
+
+  const agg = (() => {
+    let main = 0;
+    let sub = 0;
+    let blocked = 0;
+    let stale = 0;
+    let warn = 0;
+    for (const p of projects) {
+      const c = cards[p.id];
+      if (c === undefined) continue;
+      if (c.error || c.noSteps || c.skipped > 0 || c.dateBad) warn += 1;
+      if (c.blocked > 0) blocked += 1;
+      if (!c.dateBad && c.staleDays !== null && c.staleDays > STALE_DAYS)
+        stale += 1;
+      if (c.current !== null) {
+        if (c.current.depth === 1) main += 1;
+        else sub += 1;
+      }
+    }
+    return { main, sub, blocked, stale, warn };
+  })();
 
   return (
     <div className="mx-auto max-w-3xl p-6">
@@ -188,6 +366,17 @@ export function Home({
           </button>
         </div>
       </header>
+
+      {!loading && projects.length > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {projects.length} project{projects.length === 1 ? "" : "s"} ·{" "}
+          {agg.main} on main path · {agg.sub} in subtask · {agg.blocked}{" "}
+          blocked · {agg.stale} stale · {agg.warn} with parse warnings
+          {lastRefresh !== null
+            ? ` · read ${lastRefresh.toLocaleTimeString()}`
+            : ""}
+        </p>
+      )}
 
       {pendingPath !== null && (
         <div className="mt-4 space-y-3 rounded-lg border p-4">
@@ -239,9 +428,7 @@ export function Home({
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : projects.length === 0 ? (
           <div className="rounded-lg border p-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              No projects yet.
-            </p>
+            <p className="text-sm text-muted-foreground">No projects yet.</p>
             <button
               onClick={() => void pickFile()}
               className="mt-3 inline-flex items-center gap-1 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
@@ -251,11 +438,12 @@ export function Home({
             </button>
           </div>
         ) : (
-          projects.map((p) => (
+          ordered.map((p) => (
             <ProjectCard
               key={p.id}
               project={p}
               data={cards[p.id]}
+              changed={changedIds[p.id] ?? false}
               onOpen={onOpenProject}
             />
           ))

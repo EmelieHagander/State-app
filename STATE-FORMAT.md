@@ -5,7 +5,13 @@
 and **read** by the Project Tracker app. Because multiple different AIs write
 the same file, the format is a strict contract: if an AI improvises the
 format, the tracker silently drops the malformed entries. Follow this document
-exactly. Keep the file short and to the point — it is a live plan, not a log.
+exactly.
+
+**History lives in this document.** The app is a stateless read-only viewer
+and keeps no history of its own. Therefore completed steps ARE the project's
+history: keep every `done` step, in order, with its `PR #n "name"` trailer.
+Never delete or collapse completed steps. "Concise" means short titles/bodies
+and pruning only stale `## Open questions` — never the `## Path`.
 
 ## Sections (fixed order, fixed names)
 
@@ -142,7 +148,9 @@ tracker silently drops malformed entries.
   - `status` ∈ `pending | in-progress | done | blocked | parked` (bare).
   - `done` steps carry `· PR #<number> "<short pr name>"`.
   - Optional one short body line under a step (blocked reason / note).
-- Update `_Last updated:_` and `**Current focus:**` on every edit. Keep it
-  short — it is a plan, not a changelog. "parked" is a status, not a
-  section.
+- History lives in this file: keep every `done` step with its PR trailer,
+  in order — never delete completed steps. Keep ordinals stable; renumber
+  only when unavoidable. "parked" is a status, not a section.
+- Update `_Last updated:_` and `**Current focus:**` on every edit. Concise
+  means short titles/bodies and pruning only stale Open questions.
 ```

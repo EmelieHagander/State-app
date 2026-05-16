@@ -1,6 +1,10 @@
 // Run: npm test  (node --experimental-strip-types, no test framework needed)
 // Asserts the parser implements STATE-FORMAT.md.
-import { parseState, currentStep } from "../src/lib/parse-state.ts";
+import {
+  parseState,
+  currentStep,
+  summarize,
+} from "../src/lib/parse-state.ts";
 
 const md = `# Launchpad
 
@@ -66,6 +70,33 @@ const checks: [string, boolean][] = [
   ["questions 1", s.questions.length === 1],
   ["currentStep = 3", currentStep(s)?.ordinal === "3"],
   ["currentStep depth 1", currentStep(s)?.depth === 1],
+  ["skipped count = 3", s.skipped.length === 3],
+  [
+    "skipped: 2 malformed",
+    s.skipped.filter((x) => x.reason === "malformed").length === 2,
+  ],
+  [
+    "skipped: 1 orphan",
+    s.skipped.filter((x) => x.reason === "orphan").length === 1,
+  ],
+  [
+    "skipped malformed captures the wip line",
+    s.skipped.some((x) => x.text.includes("Bad status here")),
+  ],
+  [
+    "skipped orphan captures the 4.1.1 line",
+    s.skipped.some(
+      (x) => x.reason === "orphan" && x.text.includes("Orphan subtask"),
+    ),
+  ],
+  ["summary total = 7", summarize(s).total === 7],
+  ["summary done = 2", summarize(s).done === 2],
+  ["summary blocked = 0", summarize(s).blocked === 0],
+  ["summary in-progress = 2", summarize(s).byStatus["in-progress"] === 2],
+  [
+    "summary progress = 2/7",
+    Math.abs(summarize(s).progress - 2 / 7) < 1e-9,
+  ],
 ];
 
 const md2 = `# X\n_Last updated: 2026-01-01_\n## Path\n1. A · done\n2. B · pending\n3. C · pending\n`;

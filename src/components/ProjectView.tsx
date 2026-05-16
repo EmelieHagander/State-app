@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import type { Project } from "@/lib/registry";
-import { readStateFile } from "@/lib/state-md";
+import { readStateFile, statStateFile } from "@/lib/state-md";
 import { parseState, type ParsedState } from "@/lib/parse-state";
 import { readNotes, writeNotes } from "@/lib/notes";
 import { StateChecklist } from "@/components/StateChecklist";
@@ -19,6 +19,8 @@ export function ProjectView({
   const [notes, setNotes] = useState<string>("");
   const [savedNotes, setSavedNotes] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  const [changedOnDisk, setChangedOnDisk] = useState(false);
+  const recordedMtime = useRef<number | null>(null);
 
   const loadState = useCallback(async () => {
     setStateError(null);
@@ -26,6 +28,8 @@ export function ProjectView({
       const raw = await readStateFile(project.statePath);
       setState(parseState(raw));
       setLastRead(new Date());
+      recordedMtime.current = await statStateFile(project.statePath);
+      setChangedOnDisk(false);
     } catch (err) {
       setState(null);
       setStateError(err instanceof Error ? err.message : String(err));
@@ -35,6 +39,23 @@ export function ProjectView({
   useEffect(() => {
     void loadState();
   }, [loadState]);
+
+  // mtime-only liveness hint. Polls; never auto-reloads (real-time
+  // watching is intentionally parked).
+  useEffect(() => {
+    const id = setInterval(() => {
+      void statStateFile(project.statePath).then((m) => {
+        if (
+          m !== null &&
+          recordedMtime.current !== null &&
+          m > recordedMtime.current
+        ) {
+          setChangedOnDisk(true);
+        }
+      });
+    }, 5000);
+    return () => clearInterval(id);
+  }, [project.statePath]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -78,7 +99,14 @@ export function ProjectView({
           Back
         </button>
         <span className="font-medium">{project.name}</span>
-        <span className="ml-auto text-xs text-muted-foreground">
+        {changedOnDisk && (
+          <span className="ml-auto rounded-md border border-amber-600/40 px-2 py-1 text-xs text-amber-600 dark:text-amber-400">
+            Changed on disk — Refresh
+          </span>
+        )}
+        <span
+          className={`${changedOnDisk ? "" : "ml-auto "}text-xs text-muted-foreground`}
+        >
           {lastRead !== null
             ? `Last read: ${lastRead.toLocaleTimeString()}`
             : ""}
@@ -112,8 +140,25 @@ export function ProjectView({
                   values; separator is “ · ”).
                 </p>
               )}
+              {state.skipped.length > 0 && (
+                <div className="mb-4 rounded-md border border-amber-600/40 p-3 text-sm text-amber-600 dark:text-amber-400">
+                  <p className="font-medium">
+                    {state.skipped.length} step-like line
+                    {state.skipped.length === 1 ? "" : "s"} dropped (not
+                    shown) — fix against STATE-FORMAT.md:
+                  </p>
+                  <ul className="mt-1 list-disc pl-5">
+                    {state.skipped.map((sk, i) => (
+                      <li key={i} className="break-all font-mono text-xs">
+                        [{sk.reason}] {sk.text}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <StateChecklist
                 state={state}
+                projectId={project.id}
                 {...(project.repoUrl !== undefined
                   ? { repoUrl: project.repoUrl }
                   : {})}

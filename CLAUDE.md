@@ -10,10 +10,13 @@ A small Tauri 2 desktop app that tracks `STATE.md` plan files across multiple
 project repos. Each tracked project keeps a `STATE.md` at its root; various AI
 services write and update it. This app aggregates and displays them.
 
-**Core principle:** this app is a **read-only viewer of `STATE.md`**. It must
-never write to a `STATE.md` file. The only thing it writes is private,
-machine-local notes (per project) and its own registry — both in the OS
-app-data directory, never synced.
+**Core principle:** this app is a **stateless, read-only viewer of
+`STATE.md`**. It must never write to a `STATE.md` file and keeps no history
+of its own — history lives in the STATE.md document (completed steps are
+retained there with their PR trailers; see `STATE-FORMAT.md`). The only
+things it writes are private, machine-local notes (per project **and per
+step**) and its own registry — both in the OS app-data directory, never
+synced.
 
 ## Stack
 
@@ -52,8 +55,11 @@ testable headless via `node --experimental-strip-types <test>.mts`.
   (`registry.json` in app-data). `Project = { id, name, statePath, color?,
   addedAt, ... }`.
 - `src/lib/notes.ts` — per-project notes at
-  `<app-data>/projects/<id>/notes.md`; recursive mkdir on first write.
-- `src/lib/state-md.ts` — reads a `STATE.md` from disk (read-only).
+  `<app-data>/projects/<id>/notes.md` and per-step notes at
+  `<app-data>/projects/<id>/steps/<ordinal>.md` (step note stamps the step
+  title for drift detection); recursive mkdir on first write.
+- `src/lib/state-md.ts` — reads a `STATE.md` from disk and `statStateFile`
+  (mtime, for the change hint); read-only, never auto-reloads.
 - `src/lib/parse-state.ts` — parses `STATE.md` per `STATE-FORMAT.md`. This
   must implement the contract exactly; the parser and the spec are bound.
 - `src/components/*` — views (projects list, single-project two-pane,

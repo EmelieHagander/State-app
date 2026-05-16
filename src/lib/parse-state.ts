@@ -41,6 +41,11 @@ export interface Step {
   children: Step[];
 }
 
+export interface SkippedLine {
+  text: string;
+  reason: "malformed" | "orphan";
+}
+
 export interface ParsedState {
   title: string;
   lastUpdated: string;
@@ -49,6 +54,7 @@ export interface ParsedState {
   steps: Step[];
   flat: Step[];
   questions: string[];
+  skipped: SkippedLine[];
 }
 
 const SEP = " · ";
@@ -104,6 +110,7 @@ export function parseState(markdown: string): ParsedState {
     steps: [],
     flat: [],
     questions: [],
+    skipped: [],
   };
 
   let section: Section = "none";
@@ -171,9 +178,16 @@ export function parseState(markdown: string): ParsedState {
             stack.push(step);
             lastStep = step;
           } else {
+            result.skipped.push({ text: trimmed, reason: "orphan" });
             lastStep = null;
           }
         }
+        continue;
+      }
+      // A line that looks like a step (starts with an ordinal) but does not
+      // conform is a silent data-loss risk — record it instead of dropping.
+      if (ORDINAL_RE.test(trimmed)) {
+        result.skipped.push({ text: trimmed, reason: "malformed" });
         continue;
       }
       if (trimmed.length > 0 && lastStep !== null) {
@@ -205,4 +219,31 @@ export function currentStep(state: ParsedState): Step | null {
     state.flat.find((s) => s.status === "pending") ??
     null
   );
+}
+
+export interface Summary {
+  total: number;
+  byStatus: Record<StepStatus, number>;
+  done: number;
+  blocked: number;
+  progress: number; // done / total, 0 when total is 0
+}
+
+export function summarize(state: ParsedState): Summary {
+  const byStatus: Record<StepStatus, number> = {
+    pending: 0,
+    "in-progress": 0,
+    done: 0,
+    blocked: 0,
+    parked: 0,
+  };
+  for (const s of state.flat) byStatus[s.status] += 1;
+  const total = state.flat.length;
+  return {
+    total,
+    byStatus,
+    done: byStatus.done,
+    blocked: byStatus.blocked,
+    progress: total === 0 ? 0 : byStatus.done / total,
+  };
 }

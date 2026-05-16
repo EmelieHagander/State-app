@@ -16,6 +16,10 @@
       "allow": [{ "path": "$HOME/**" }]
     },
     {
+      "identifier": "fs:allow-stat",
+      "allow": [{ "path": "$HOME/**" }]
+    },
+    {
       "identifier": "fs:allow-write-file",
       "allow": [{ "path": "$APPDATA/**" }]
     },
