@@ -76,6 +76,7 @@ testable headless via `node --experimental-strip-types <test>.mts`.
 - **Dogfood:** at the end of each session, update this repo's own `STATE.md`
   to reflect reality, following `STATE-FORMAT.md` exactly.
 - The `STATE.md` parser must match `STATE-FORMAT.md`. If the format changes,
-  change the spec and the parser together, and add a parser test. They must
-  never drift (a past parser silently broke on the real format — do not
-  reintroduce that).
+  change the spec, `src/lib/parse-state.ts`, AND the mirrored parser in
+  `state-viewer.html` together. `npm test` enforces parity between the two
+  and must stay green (a past parser silently broke on the real format and
+  the fallback viewer drifted — do not reintroduce that).

@@ -11,6 +11,9 @@
         --muted: #6b7280;
         --border: #e5e7eb;
         --bg: #ffffff;
+        --amber: #b45309;
+        --red: #dc2626;
+        --green: #059669;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -18,6 +21,9 @@
           --muted: #9ca3af;
           --border: #2a2a2a;
           --bg: #161616;
+          --amber: #f59e0b;
+          --red: #f87171;
+          --green: #34d399;
         }
       }
       * { box-sizing: border-box; }
@@ -41,6 +47,7 @@
       .item { display: flex; gap: 8px; margin-top: 10px; }
       .item.sub { margin-left: 26px; }
       .icon { width: 16px; text-align: center; flex: none; line-height: 1.4; }
+      .ord { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); margin-right: 6px; }
       .title { font-weight: 600; }
       .badge {
         display: inline-block;
@@ -51,15 +58,24 @@
         margin-left: 8px;
         vertical-align: middle;
       }
-      .body { font-size: 0.9rem; color: var(--muted); margin: 2px 0 0; }
-      .itemmeta { font-size: 0.78rem; font-style: italic; color: var(--muted); margin: 2px 0 0; }
+      .pr { color: var(--muted); }
+      .body { font-size: 0.9rem; color: var(--muted); margin: 2px 0 0; white-space: pre-line; }
       .where { white-space: pre-line; color: var(--muted); font-size: 0.9rem; }
       ul.plain { margin: 6px 0 0; padding-left: 20px; color: var(--muted); font-size: 0.9rem; }
-      .done { color: #059669; }
-      .active { color: #2563eb; }
-      .blocked { color: #dc2626; }
-      .pending, .skipped, .unknown { color: var(--muted); }
-      .skipped .title { text-decoration: line-through; }
+      .done { color: var(--green); }
+      .in-progress { color: var(--amber); }
+      .blocked { color: var(--red); }
+      .pending, .parked { color: var(--muted); }
+      .warn {
+        margin: 16px 0;
+        border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
+        border-radius: 8px;
+        padding: 10px 12px;
+        color: var(--amber);
+        font-size: 0.85rem;
+      }
+      .warn ul { margin: 6px 0 0; padding-left: 18px; }
+      .warn li { font: 12px/1.5 ui-monospace, monospace; word-break: break-all; }
       button, label.file {
         font: inherit;
         border: 1px solid var(--border);
@@ -85,7 +101,7 @@
     <div class="wrap">
       <div class="toolbar">
         <strong>STATE.md Viewer</strong>
-        <span class="meta-top">— standalone fallback, same parser rules as the app</span>
+        <span class="meta-top">— standalone fallback, mirrors STATE-FORMAT.md / the app parser</span>
         <label class="file" style="margin-left:auto">
           Open STATE.md
           <input id="file" type="file" accept=".md,text/markdown" hidden />
@@ -100,20 +116,51 @@
     </div>
 
     <script>
-      // Strict STATE.md parser — mirrors src/lib/parse-state.ts.
-      const STATUS = new Set(["done", "active", "pending", "blocked", "skipped"]);
-      function normStatus(s) {
-        s = s.trim().toLowerCase();
-        return STATUS.has(s) ? s : "unknown";
+      // Mirrors src/lib/parse-state.ts — keep in sync with STATE-FORMAT.md.
+      const STATUSES = new Set([
+        "pending",
+        "in-progress",
+        "done",
+        "blocked",
+        "parked",
+      ]);
+      const SEP = " · ";
+      const ORDINAL_RE = /^(\d+(?:\.\d+)*)\.?\s+(.*)$/;
+      const PR_RE = /^PR #(\d+)\s+"([^"]*)"$/;
+
+      function asStatus(raw) {
+        return STATUSES.has(raw) ? raw : null;
       }
-      function splitTrailer(text) {
-        const idx = text.lastIndexOf(" · ");
-        if (idx === -1) return null;
-        const title = text.slice(0, idx).trim();
-        const status = text.slice(idx + 3).trim();
-        if (!title || !status) return null;
-        return { title, status: normStatus(status) };
+
+      function parseStepLine(text) {
+        const m = ORDINAL_RE.exec(text);
+        if (m === null) return null;
+        const ordinal = m[1] || "";
+        const rest = (m[2] || "").trim();
+        if (!ordinal || !rest) return null;
+        const parts = rest.split(SEP);
+        if (parts.length < 2) return null;
+        const title = (parts[0] || "").trim();
+        const status = asStatus((parts[1] || "").trim());
+        if (!title || status === null) return null;
+        let pr = null;
+        if (parts.length >= 3) {
+          const pm = PR_RE.exec(parts.slice(2).join(SEP).trim());
+          if (pm !== null) pr = { number: Number(pm[1]), name: pm[2] || "" };
+        }
+        const segments = ordinal.split(".").map((s) => Number(s));
+        return {
+          ordinal,
+          segments,
+          depth: segments.length,
+          title,
+          status,
+          pr,
+          body: "",
+          children: [],
+        };
       }
+
       function parseState(md) {
         const lines = md.split(/\r?\n/);
         const r = {
@@ -121,23 +168,16 @@
           lastUpdated: "",
           currentFocus: "",
           where: "",
-          path: [],
-          parked: [],
+          steps: [],
+          flat: [],
           questions: [],
+          skipped: [],
         };
         let section = "none";
         const whereLines = [];
-        let main = null,
-          sub = null;
-        const pend = (it, line) => {
-          const t = line.trim();
-          if (!t) return;
-          if (t.startsWith("_") && t.endsWith("_") && t.length > 1) {
-            if (!it.meta) it.meta = t.slice(1, -1).trim();
-            return;
-          }
-          if (!it.body) it.body = t;
-        };
+        const stack = [];
+        let lastStep = null;
+
         for (const raw of lines) {
           const t = raw.trim();
           if (t.startsWith("# ") && !r.title) {
@@ -145,60 +185,71 @@
             continue;
           }
           const lu = /^_Last updated:\s*(.+?)_$/.exec(t);
-          if (lu && !r.lastUpdated) {
-            r.lastUpdated = lu[1].trim();
+          if (lu !== null && !r.lastUpdated) {
+            r.lastUpdated = (lu[1] || "").trim();
             continue;
           }
           if (t.startsWith("## ")) {
             const h = t.slice(3).trim().toLowerCase();
-            main = null;
-            sub = null;
+            lastStep = null;
             section = h.includes("where we are")
               ? "where"
               : h.includes("path")
                 ? "path"
-                : h.includes("parked")
-                  ? "parked"
-                  : h.includes("open questions")
-                    ? "questions"
-                    : "none";
+                : h.includes("open questions")
+                  ? "questions"
+                  : "none";
             continue;
           }
           if (section === "where") {
             const f = /^\*\*Current focus:\*\*\s*(.+)$/.exec(t);
-            if (f) {
-              r.currentFocus = f[1].trim();
+            if (f !== null) {
+              r.currentFocus = (f[1] || "").trim();
               continue;
             }
             if (t) whereLines.push(t);
             continue;
           }
           if (section === "path") {
-            if (t.startsWith("#### ")) {
-              const sp = splitTrailer(t.slice(5).trim());
-              if (sp && main) {
-                sub = { ...sp, body: "", meta: "", subItems: [] };
-                main.subItems.push(sub);
-              } else sub = null;
+            const step = parseStepLine(t);
+            if (step !== null) {
+              while (
+                stack.length > 0 &&
+                (stack[stack.length - 1]?.depth ?? 0) >= step.depth
+              ) {
+                stack.pop();
+              }
+              if (step.depth === 1) {
+                r.steps.push(step);
+                r.flat.push(step);
+                stack.push(step);
+                lastStep = step;
+              } else {
+                const parent = stack[stack.length - 1];
+                if (parent !== undefined && parent.depth === step.depth - 1) {
+                  parent.children.push(step);
+                  r.flat.push(step);
+                  stack.push(step);
+                  lastStep = step;
+                } else {
+                  r.skipped.push({ text: t, reason: "orphan" });
+                  lastStep = null;
+                }
+              }
               continue;
             }
-            if (t.startsWith("### ")) {
-              const sp = splitTrailer(t.slice(4).trim());
-              if (sp) {
-                main = { ...sp, body: "", meta: "", subItems: [] };
-                r.path.push(main);
-              } else main = null;
-              sub = null;
+            if (ORDINAL_RE.test(t)) {
+              r.skipped.push({ text: t, reason: "malformed" });
               continue;
             }
-            const target = sub || main;
-            if (target) pend(target, raw);
+            if (t && lastStep !== null) {
+              lastStep.body = lastStep.body ? lastStep.body + "\n" + t : t;
+            }
             continue;
           }
-          if (section === "parked" && t.startsWith("- "))
-            r.parked.push(t.slice(2).trim());
-          if (section === "questions" && t.startsWith("- "))
+          if (section === "questions" && t.startsWith("- ")) {
             r.questions.push(t.slice(2).trim());
+          }
         }
         r.where = whereLines.join("\n").trim();
         return r;
@@ -206,23 +257,28 @@
 
       const ICON = {
         done: "✔",
-        active: "◉",
+        "in-progress": "⟳",
         pending: "○",
-        blocked: "⚠",
-        skipped: "⊖",
-        unknown: "?",
+        blocked: "⛔",
+        parked: "☾",
       };
       const esc = (s) =>
-        s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+        String(s).replace(
+          /[&<>]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        );
 
-      function renderItem(it, sub) {
-        let h = `<div class="item ${sub ? "sub " : ""}${it.status}">`;
+      function renderStep(it) {
+        let h = `<div class="item ${it.depth > 1 ? "sub " : ""}${it.status}">`;
         h += `<div class="icon">${ICON[it.status]}</div><div>`;
-        h += `<span class="title">${esc(it.title)}</span><span class="badge">${it.status}</span>`;
+        h += `<span class="ord">${esc(it.ordinal)}</span>`;
+        h += `<span class="title">${esc(it.title)}</span>`;
+        h += `<span class="badge">${it.status}</span>`;
+        if (it.pr)
+          h += `<span class="badge pr">PR #${it.pr.number} ${esc(it.pr.name)}</span>`;
         if (it.body) h += `<p class="body">${esc(it.body)}</p>`;
-        if (it.meta) h += `<p class="itemmeta">${esc(it.meta)}</p>`;
         h += `</div></div>`;
-        for (const s of it.subItems) h += renderItem(s, true);
+        for (const c of it.children) h += renderStep(c);
         return h;
       }
 
@@ -235,14 +291,15 @@
         if (s.currentFocus)
           h += `<p><strong>Current focus:</strong> ${esc(s.currentFocus)}</p>`;
         if (s.where) h += `<p class="where">${esc(s.where)}</p>`;
-        h += `<h2>Path</h2>`;
-        if (!s.path.length) h += `<p class="body">No path items.</p>`;
-        for (const it of s.path) h += renderItem(it, false);
-        if (s.parked.length) {
-          h += `<h2>Parked</h2><ul class="plain">`;
-          for (const p of s.parked) h += `<li>${esc(p)}</li>`;
-          h += `</ul>`;
+        if (s.skipped.length) {
+          h += `<div class="warn"><strong>${s.skipped.length} step-like line(s) dropped (not shown)</strong> — fix against STATE-FORMAT.md:<ul>`;
+          for (const sk of s.skipped)
+            h += `<li>[${sk.reason}] ${esc(sk.text)}</li>`;
+          h += `</ul></div>`;
         }
+        h += `<h2>Path</h2>`;
+        if (!s.steps.length) h += `<p class="body">No steps.</p>`;
+        for (const it of s.steps) h += renderStep(it);
         if (s.questions.length) {
           h += `<h2>Open questions</h2><ul class="plain">`;
           for (const q of s.questions) h += `<li>${esc(q)}</li>`;

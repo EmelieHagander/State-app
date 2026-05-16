@@ -26,6 +26,10 @@ daily-use feedback still needs a human on a machine with a display.
 5. Session 4 — integrity telemetry, dashboard, mtime hint, per-step notes · done
    Audit-driven: parser reports dropped lines; Home dashboard; contract now
    keeps history in the document (done steps retained).
+5.1 Resync state-viewer.html to the contract + add parser-parity test · done
+   Discovered during 5 — the fallback viewer still ran the obsolete
+   session-1 grammar. Rewritten to mirror parse-state.ts; npm test now
+   asserts the two parsers stay byte-identical.
 6. Collect first daily-use feedback, then polish from real signal · pending
    Needs a human running `npm run tauri dev`; cannot be done headless.
 
