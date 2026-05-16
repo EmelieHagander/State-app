@@ -1,17 +1,16 @@
 import {
   CheckCircle2,
-  CircleDot,
+  Loader2,
   Circle,
-  AlertTriangle,
-  MinusCircle,
-  HelpCircle,
+  OctagonAlert,
+  Moon,
   type LucideIcon,
 } from "lucide-react";
-import type { ItemStatus } from "@/lib/parse-state";
+import type { StepStatus } from "@/lib/parse-state";
 import { cn } from "@/lib/utils";
 
 const MAP: Record<
-  ItemStatus,
+  StepStatus,
   { icon: LucideIcon; label: string; className: string }
 > = {
   done: {
@@ -19,10 +18,10 @@ const MAP: Record<
     label: "done",
     className: "text-emerald-600 dark:text-emerald-400",
   },
-  active: {
-    icon: CircleDot,
-    label: "active",
-    className: "text-blue-600 dark:text-blue-400",
+  "in-progress": {
+    icon: Loader2,
+    label: "in-progress",
+    className: "text-amber-600 dark:text-amber-400",
   },
   pending: {
     icon: Circle,
@@ -30,28 +29,23 @@ const MAP: Record<
     className: "text-muted-foreground",
   },
   blocked: {
-    icon: AlertTriangle,
+    icon: OctagonAlert,
     label: "blocked",
     className: "text-red-600 dark:text-red-400",
   },
-  skipped: {
-    icon: MinusCircle,
-    label: "skipped",
-    className: "text-muted-foreground line-through",
-  },
-  unknown: {
-    icon: HelpCircle,
-    label: "unknown",
+  parked: {
+    icon: Moon,
+    label: "parked",
     className: "text-muted-foreground",
   },
 };
 
-export function StatusIcon({ status }: { status: ItemStatus }) {
+export function StatusIcon({ status }: { status: StepStatus }) {
   const { icon: Icon, className } = MAP[status];
   return <Icon className={cn("size-4 shrink-0", className)} aria-hidden />;
 }
 
-export function StatusBadge({ status }: { status: ItemStatus }) {
+export function StatusBadge({ status }: { status: StepStatus }) {
   const { label, className } = MAP[status];
   return (
     <span

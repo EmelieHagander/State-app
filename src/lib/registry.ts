@@ -9,6 +9,7 @@ export interface Project {
   name: string;
   statePath: string;
   color?: string;
+  repoUrl?: string;
   addedAt: string;
 }
 
@@ -46,6 +47,7 @@ export async function addProject(input: {
   name: string;
   statePath: string;
   color?: string;
+  repoUrl?: string;
 }): Promise<Project> {
   const projects = await getProjects();
   const project: Project = {
@@ -54,6 +56,7 @@ export async function addProject(input: {
     statePath: input.statePath,
     addedAt: new Date().toISOString(),
     ...(input.color !== undefined ? { color: input.color } : {}),
+    ...(input.repoUrl !== undefined ? { repoUrl: input.repoUrl } : {}),
   };
   await setProjects([...projects, project]);
   return project;
