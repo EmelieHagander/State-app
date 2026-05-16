@@ -15,6 +15,7 @@ export function ProjectView({
 }) {
   const [state, setState] = useState<ParsedState | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
+  const [lastRead, setLastRead] = useState<Date | null>(null);
   const [notes, setNotes] = useState<string>("");
   const [savedNotes, setSavedNotes] = useState<string>("");
   const [saving, setSaving] = useState(false);
@@ -24,6 +25,7 @@ export function ProjectView({
     try {
       const raw = await readStateFile(project.statePath);
       setState(parseState(raw));
+      setLastRead(new Date());
     } catch (err) {
       setState(null);
       setStateError(err instanceof Error ? err.message : String(err));
@@ -68,9 +70,14 @@ export function ProjectView({
           Back
         </button>
         <span className="font-medium">{project.name}</span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {lastRead !== null
+            ? `Last read: ${lastRead.toLocaleTimeString()}`
+            : ""}
+        </span>
         <button
           onClick={() => void loadState()}
-          className="ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-1 text-sm hover:bg-accent"
+          className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-sm hover:bg-accent"
           title="Re-read STATE.md from disk"
         >
           <RefreshCw className="size-4" />
@@ -89,7 +96,12 @@ export function ProjectView({
           ) : state === null ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : (
-            <StateChecklist state={state} />
+            <StateChecklist
+              state={state}
+              {...(project.repoUrl !== undefined
+                ? { repoUrl: project.repoUrl }
+                : {})}
+            />
           )}
         </div>
 

@@ -1,15 +1,34 @@
 import { useState } from "react";
 import type { Project } from "@/lib/registry";
-import { ProjectsView } from "@/components/ProjectsView";
+import { Home } from "@/components/Home";
 import { ProjectView } from "@/components/ProjectView";
+import { Manage } from "@/components/Manage";
+
+type View =
+  | { kind: "home" }
+  | { kind: "project"; project: Project }
+  | { kind: "manage" };
 
 function App() {
-  const [active, setActive] = useState<Project | null>(null);
+  const [view, setView] = useState<View>({ kind: "home" });
 
-  if (active !== null) {
-    return <ProjectView project={active} onBack={() => setActive(null)} />;
+  if (view.kind === "project") {
+    return (
+      <ProjectView
+        project={view.project}
+        onBack={() => setView({ kind: "home" })}
+      />
+    );
   }
-  return <ProjectsView onOpenProject={setActive} />;
+  if (view.kind === "manage") {
+    return <Manage onBack={() => setView({ kind: "home" })} />;
+  }
+  return (
+    <Home
+      onOpenProject={(project) => setView({ kind: "project", project })}
+      onManage={() => setView({ kind: "manage" })}
+    />
+  );
 }
 
 export default App;

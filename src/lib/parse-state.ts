@@ -1,50 +1,44 @@
-// Strict STATE.md parser. No defensive parsing: lines that do not match the
-// template are skipped rather than coerced.
+// STATE.md parser — implements STATE-FORMAT.md exactly. Strict: any line that
+// does not conform is skipped silently (never surfaced as an "unknown" badge).
 //
-// Template shape:
-//
-//   # <title>
-//
-//   _Last updated: <date>_
-//
-//   ## 1. Where we are
-//
-//   **Current focus:** <one line>
-//
-//   <free-text "where" paragraph(s)>
-//
-//   ## 2. Path
-//
-//   ### <step title> · <status>
-//   <body line>
-//   _<meta line>_
-//
-//   #### <sub-item title> · <status>
-//   <body line>
-//   _<meta line>_
-//
-//   ## 3. Parked
-//
-//   - <item>
-//
-//   ## 4. Open questions
-//
-//   - <item>
+// Step line grammar (one line per step):
+//   <ordinal> <title> · <status>[ · PR #<number> "<pr name>"]
+// where ordinal = \d+(.\d+)* (hierarchical), separator = " · " (U+00B7),
+// status ∈ the five below (bare, no backticks), optional PR trailer.
 
-export type ItemStatus =
-  | "done"
-  | "active"
+export type StepStatus =
   | "pending"
+  | "in-progress"
+  | "done"
   | "blocked"
-  | "skipped"
-  | "unknown";
+  | "parked";
 
-export interface PathItem {
+const STATUSES: ReadonlySet<string> = new Set<StepStatus>([
+  "pending",
+  "in-progress",
+  "done",
+  "blocked",
+  "parked",
+]);
+
+function asStatus(raw: string): StepStatus | null {
+  return STATUSES.has(raw) ? (raw as StepStatus) : null;
+}
+
+export interface PR {
+  number: number;
+  name: string;
+}
+
+export interface Step {
+  ordinal: string;
+  segments: number[];
+  depth: number;
   title: string;
-  status: ItemStatus;
+  status: StepStatus;
+  pr: PR | null;
   body: string;
-  meta: string;
-  subItems: PathItem[];
+  children: Step[];
 }
 
 export interface ParsedState {
@@ -52,36 +46,52 @@ export interface ParsedState {
   lastUpdated: string;
   currentFocus: string;
   where: string;
-  path: PathItem[];
-  parked: string[];
+  steps: Step[];
+  flat: Step[];
   questions: string[];
 }
 
-const STATUS_VALUES: ReadonlySet<string> = new Set([
-  "done",
-  "active",
-  "pending",
-  "blocked",
-  "skipped",
-]);
+const SEP = " · ";
+const ORDINAL_RE = /^(\d+(?:\.\d+)*)\.?\s+(.*)$/;
+const PR_RE = /^PR #(\d+)\s+"([^"]*)"$/;
 
-function normalizeStatus(raw: string): ItemStatus {
-  const s = raw.trim().toLowerCase();
-  return STATUS_VALUES.has(s) ? (s as ItemStatus) : "unknown";
+type Section = "none" | "where" | "path" | "questions";
+
+// Parses one Path line into a Step, or null if it does not conform.
+function parseStepLine(text: string): Step | null {
+  const m = ORDINAL_RE.exec(text);
+  if (m === null) return null;
+  const ordinal = m[1] ?? "";
+  const rest = (m[2] ?? "").trim();
+  if (ordinal.length === 0 || rest.length === 0) return null;
+
+  const parts = rest.split(SEP);
+  if (parts.length < 2) return null;
+
+  const title = (parts[0] ?? "").trim();
+  const status = asStatus((parts[1] ?? "").trim());
+  if (title.length === 0 || status === null) return null;
+
+  let pr: PR | null = null;
+  if (parts.length >= 3) {
+    const prMatch = PR_RE.exec(parts.slice(2).join(SEP).trim());
+    if (prMatch !== null) {
+      pr = { number: Number(prMatch[1]), name: prMatch[2] ?? "" };
+    }
+  }
+
+  const segments = ordinal.split(".").map((s) => Number(s));
+  return {
+    ordinal,
+    segments,
+    depth: segments.length,
+    title,
+    status,
+    pr,
+    body: "",
+    children: [],
+  };
 }
-
-// Splits a heading on the " · " (U+00B7) trailer into [title, status].
-// Returns null if there is no valid trailer — strict template.
-function splitTrailer(text: string): { title: string; status: ItemStatus } | null {
-  const idx = text.lastIndexOf(" · ");
-  if (idx === -1) return null;
-  const title = text.slice(0, idx).trim();
-  const status = text.slice(idx + 3).trim();
-  if (title.length === 0 || status.length === 0) return null;
-  return { title, status: normalizeStatus(status) };
-}
-
-type Section = "none" | "where" | "path" | "parked" | "questions";
 
 export function parseState(markdown: string): ParsedState {
   const lines = markdown.split(/\r?\n/);
@@ -91,61 +101,48 @@ export function parseState(markdown: string): ParsedState {
     lastUpdated: "",
     currentFocus: "",
     where: "",
-    path: [],
-    parked: [],
+    steps: [],
+    flat: [],
     questions: [],
   };
 
   let section: Section = "none";
   const whereLines: string[] = [];
-  let currentMain: PathItem | null = null;
-  let currentSub: PathItem | null = null;
-
-  const pendingBody = (item: PathItem, line: string): void => {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) return;
-    if (trimmed.startsWith("_") && trimmed.endsWith("_") && trimmed.length > 1) {
-      if (item.meta.length === 0) {
-        item.meta = trimmed.slice(1, -1).trim();
-      }
-      return;
-    }
-    if (item.body.length === 0) {
-      item.body = trimmed;
-    }
-  };
+  // Ancestor stack for hierarchy: each entry is a step that can parent a
+  // deeper one. A step at depth d attaches to the nearest ancestor at depth
+  // d-1; if none exists it is skipped (malformed hierarchy), except depth 1
+  // which is always a root.
+  const stack: Step[] = [];
+  let lastStep: Step | null = null;
 
   for (const rawLine of lines) {
-    const line = rawLine;
-    const trimmed = line.trim();
+    const trimmed = rawLine.trim();
 
     if (trimmed.startsWith("# ") && result.title.length === 0) {
       result.title = trimmed.slice(2).trim();
       continue;
     }
 
-    const lastUpdatedMatch = /^_Last updated:\s*(.+?)_$/.exec(trimmed);
-    if (lastUpdatedMatch && result.lastUpdated.length === 0) {
-      result.lastUpdated = (lastUpdatedMatch[1] ?? "").trim();
+    const lu = /^_Last updated:\s*(.+?)_$/.exec(trimmed);
+    if (lu !== null && result.lastUpdated.length === 0) {
+      result.lastUpdated = (lu[1] ?? "").trim();
       continue;
     }
 
     if (trimmed.startsWith("## ")) {
-      const heading = trimmed.slice(3).trim().toLowerCase();
-      currentMain = null;
-      currentSub = null;
-      if (heading.includes("where we are")) section = "where";
-      else if (heading.includes("path")) section = "path";
-      else if (heading.includes("parked")) section = "parked";
-      else if (heading.includes("open questions")) section = "questions";
+      const h = trimmed.slice(3).trim().toLowerCase();
+      lastStep = null;
+      if (h.includes("where we are")) section = "where";
+      else if (h.includes("path")) section = "path";
+      else if (h.includes("open questions")) section = "questions";
       else section = "none";
       continue;
     }
 
     if (section === "where") {
-      const focusMatch = /^\*\*Current focus:\*\*\s*(.+)$/.exec(trimmed);
-      if (focusMatch) {
-        result.currentFocus = (focusMatch[1] ?? "").trim();
+      const focus = /^\*\*Current focus:\*\*\s*(.+)$/.exec(trimmed);
+      if (focus !== null) {
+        result.currentFocus = (focus[1] ?? "").trim();
         continue;
       }
       if (trimmed.length > 0) whereLines.push(trimmed);
@@ -153,55 +150,59 @@ export function parseState(markdown: string): ParsedState {
     }
 
     if (section === "path") {
-      if (trimmed.startsWith("#### ")) {
-        const split = splitTrailer(trimmed.slice(5).trim());
-        if (split && currentMain) {
-          currentSub = {
-            title: split.title,
-            status: split.status,
-            body: "",
-            meta: "",
-            subItems: [],
-          };
-          currentMain.subItems.push(currentSub);
+      const step = parseStepLine(trimmed);
+      if (step !== null) {
+        while (
+          stack.length > 0 &&
+          (stack[stack.length - 1]?.depth ?? 0) >= step.depth
+        ) {
+          stack.pop();
+        }
+        if (step.depth === 1) {
+          result.steps.push(step);
+          result.flat.push(step);
+          stack.push(step);
+          lastStep = step;
         } else {
-          currentSub = null;
+          const parent = stack[stack.length - 1];
+          if (parent !== undefined && parent.depth === step.depth - 1) {
+            parent.children.push(step);
+            result.flat.push(step);
+            stack.push(step);
+            lastStep = step;
+          } else {
+            lastStep = null;
+          }
         }
         continue;
       }
-      if (trimmed.startsWith("### ")) {
-        const split = splitTrailer(trimmed.slice(4).trim());
-        if (split) {
-          currentMain = {
-            title: split.title,
-            status: split.status,
-            body: "",
-            meta: "",
-            subItems: [],
-          };
-          result.path.push(currentMain);
-        } else {
-          currentMain = null;
-        }
-        currentSub = null;
-        continue;
+      if (trimmed.length > 0 && lastStep !== null) {
+        lastStep.body =
+          lastStep.body.length === 0
+            ? trimmed
+            : `${lastStep.body}\n${trimmed}`;
       }
-      const target = currentSub ?? currentMain;
-      if (target) pendingBody(target, line);
-      continue;
-    }
-
-    if (section === "parked") {
-      if (trimmed.startsWith("- ")) result.parked.push(trimmed.slice(2).trim());
       continue;
     }
 
     if (section === "questions") {
-      if (trimmed.startsWith("- ")) result.questions.push(trimmed.slice(2).trim());
+      if (trimmed.startsWith("- ")) {
+        result.questions.push(trimmed.slice(2).trim());
+      }
       continue;
     }
   }
 
   result.where = whereLines.join("\n").trim();
   return result;
+}
+
+// Derived "current step": first in-progress, else first pending, in document
+// order. depth === 1 means on the main path; depth > 1 means in a subtask.
+export function currentStep(state: ParsedState): Step | null {
+  return (
+    state.flat.find((s) => s.status === "in-progress") ??
+    state.flat.find((s) => s.status === "pending") ??
+    null
+  );
 }
