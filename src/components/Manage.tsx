@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, FolderOpen, Plus, Trash2 } from "lucide-react";
 import {
   addProject,
   getProjects,
@@ -34,6 +34,16 @@ function Row({
   async function commit(patch: Partial<Omit<Project, "id">>) {
     await updateProject(project.id, patch);
     onChanged();
+  }
+
+  async function changeFile() {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (typeof selected !== "string" || selected === project.statePath) return;
+    await commit({ statePath: selected });
   }
 
   return (
@@ -77,9 +87,19 @@ function Row({
         )}
       </div>
 
-      <p className="break-all font-mono text-xs text-muted-foreground">
-        {project.statePath}
-      </p>
+      <div className="flex items-start gap-2">
+        <p className="min-w-0 flex-1 break-all font-mono text-xs text-muted-foreground">
+          {project.statePath}
+        </p>
+        <button
+          onClick={() => void changeFile()}
+          title="Point this project at a different STATE.md"
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-accent"
+        >
+          <FolderOpen className="size-3.5" />
+          Change file…
+        </button>
+      </div>
 
       <input
         value={repoUrl}
